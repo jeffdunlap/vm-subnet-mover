@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`vm-subnet-mover` is a PowerShell script project that automates moving virtual machines (VMs) to a new subnet. The script preserves the last octet of a VM's current IP address and reassigns the first three octets to match the destination subnet.
+`vm-subnet-mover` is a PowerShell script project that helps move VMs (and other networked devices) to a new subnet. The script preserves the last octet of a device's current IP address and reassigns the first three octets to match the destination subnet.
 
 This project is in early development. The main script file exists but is currently empty.
 
@@ -19,22 +19,26 @@ vm-subnet-mover/
 
 ## Development Status
 
-The project is in early scaffolding. Key work remaining (per `TODO.md`):
+The project is in early scaffolding. All items below are tracked in `TODO.md` and remain incomplete:
 
-- **`vm-subnet-mover.ps1`**: Script body is empty — the entire implementation is pending
-- **`README.md`**: Empty — documentation not yet written
-- **Unit tests**: Not yet created; Pester is the planned test framework
+- [ ] Build a comprehensive `README.md`
+- [ ] Build `vm-subnet-mover.ps1` (note: `TODO.md` refers to this as `vm-subnet-move.ps1` — the actual file in the repo is `vm-subnet-mover.ps1`)
+  - [ ] Accept a parameter for the subnet to move devices to
+  - [ ] Accept a parameter for the subnet mask used on the destination network
+  - [ ] Log the current IP address and what it is changing to
+  - [ ] Keep the current last octet of the IP address and change the first three octets to the new subnet
+- [ ] Build unit tests for the script using Pester
 
 ## Planned Script Behavior
 
 The script (`vm-subnet-mover.ps1`) is planned to:
 
-1. Accept a parameter for the **destination subnet** (e.g., `192.168.10`)
-2. Accept a parameter for the **destination subnet mask** (e.g., `255.255.255.0`)
-3. Determine the VM's **current IP address** and log it
-4. Compute the **new IP address** by replacing the first three octets with the destination subnet while keeping the last octet unchanged
-5. Apply the new IP configuration to the VM's network adapter
-6. Log both the original and new IP address
+1. Accept a parameter for the **destination subnet** to move devices to (e.g., `192.168.10`)
+2. Accept a parameter for the **subnet mask** used on the destination network (e.g., `255.255.255.0`)
+3. Identify and log the device's **current IP address**
+4. Compute the **new IP address** by replacing the first three octets with the destination subnet prefix while keeping the last octet unchanged
+5. Apply the new IP configuration
+6. Log what the IP address is **changing to**
 
 ## Conventions
 
@@ -84,7 +88,9 @@ Invoke-Pester ./tests/
 ## Notes for AI Assistants
 
 - The `vm-subnet-mover.ps1` file is **empty** — any implementation should be written from scratch following the planned requirements in `TODO.md`
+- `TODO.md` refers to the script as `vm-subnet-move.ps1` (missing trailing `r`); the actual file on disk is `vm-subnet-mover.ps1` — use the actual filename
+- The script targets **devices** broadly (not just VMs); the phrasing "move devices to" in `TODO.md` is intentional
 - Subnet manipulation logic: preserve the last octet (e.g., `.45`) and prepend the new three-octet prefix (e.g., `10.20.30`) to form the new IP
-- The script operates on Windows VMs; network adapter cmdlets like `Get-NetIPAddress` and `Set-NetIPAddress` are the relevant PowerShell native APIs
-- Logging should record both before and after IP addresses for auditability
+- Logging must capture: the current IP address **and** the new IP address it is changing to — per `TODO.md` requirement
+- The script operates on Windows; network adapter cmdlets like `Get-NetIPAddress` and `Set-NetIPAddress` are the relevant PowerShell native APIs
 - `README.md` is empty and should be written once the script implementation is defined
