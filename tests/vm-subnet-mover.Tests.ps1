@@ -4,7 +4,6 @@ BeforeAll {
 
 Describe "Test-ValidIPv4" {
     BeforeAll {
-        # Dot-source only the helper functions from the script
         . {
             function Test-ValidIPv4 {
                 param([string]$Address)
@@ -43,40 +42,144 @@ Describe "Test-ValidIPv4" {
     }
 }
 
-Describe "Convert-MaskToPrefixLength" {
+Describe "Convert-PrefixLengthToMask" {
     BeforeAll {
         . {
-            function Convert-MaskToPrefixLength {
-                param([string]$Mask)
-                $binary = ($Mask -split '\.' | ForEach-Object { [Convert]::ToString([int]$_, 2).PadLeft(8, '0') }) -join ''
-                return ($binary.ToCharArray() | Where-Object { $_ -eq '1' }).Count
+            function Convert-PrefixLengthToMask {
+                param([int]$PrefixLength)
+                $binary = '1' * $PrefixLength + '0' * (32 - $PrefixLength)
+                $octets = for ($i = 0; $i -lt 32; $i += 8) {
+                    [Convert]::ToInt32($binary.Substring($i, 8), 2)
+                }
+                return $octets -join '.'
             }
         }
     }
 
-    It "converts 255.255.255.0 to 24" {
-        Convert-MaskToPrefixLength -Mask "255.255.255.0" | Should -Be 24
+    It "converts /24 to 255.255.255.0" {
+        Convert-PrefixLengthToMask -PrefixLength 24 | Should -Be "255.255.255.0"
     }
 
-    It "converts 255.255.0.0 to 16" {
-        Convert-MaskToPrefixLength -Mask "255.255.0.0" | Should -Be 16
+    It "converts /16 to 255.255.0.0" {
+        Convert-PrefixLengthToMask -PrefixLength 16 | Should -Be "255.255.0.0"
     }
 
-    It "converts 255.0.0.0 to 8" {
-        Convert-MaskToPrefixLength -Mask "255.0.0.0" | Should -Be 8
+    It "converts /8 to 255.0.0.0" {
+        Convert-PrefixLengthToMask -PrefixLength 8 | Should -Be "255.0.0.0"
     }
 
-    It "converts 255.255.255.128 to 25" {
-        Convert-MaskToPrefixLength -Mask "255.255.255.128" | Should -Be 25
+    It "converts /23 to 255.255.254.0" {
+        Convert-PrefixLengthToMask -PrefixLength 23 | Should -Be "255.255.254.0"
+    }
+
+    It "converts /25 to 255.255.255.128" {
+        Convert-PrefixLengthToMask -PrefixLength 25 | Should -Be "255.255.255.128"
+    }
+
+    It "converts /32 to 255.255.255.255" {
+        Convert-PrefixLengthToMask -PrefixLength 32 | Should -Be "255.255.255.255"
+    }
+
+    It "converts /0 to 0.0.0.0" {
+        Convert-PrefixLengthToMask -PrefixLength 0 | Should -Be "0.0.0.0"
+    }
+}
+
+Describe "ConvertFrom-CIDR" {
+    BeforeAll {
+        . {
+            function Test-ValidIPv4 {
+                param([string]$Address)
+                if ($Address -notmatch '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { return $false }
+                $octets = $Address -split '\.'
+                foreach ($octet in $octets) {
+                    if ([int]$octet -lt 0 -or [int]$octet -gt 255) { return $false }
+                }
+                return $true
+            }
+
+            function Convert-PrefixLengthToMask {
+                param([int]$PrefixLength)
+                $binary = '1' * $PrefixLength + '0' * (32 - $PrefixLength)
+                $octets = for ($i = 0; $i -lt 32; $i += 8) {
+                    [Convert]::ToInt32($binary.Substring($i, 8), 2)
+                }
+                return $octets -join '.'
+            }
+
+            function ConvertFrom-CIDR {
+                param([string]$CIDR)
+                if ($CIDR -notmatch '^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/(\d{1,2})$') { return $null }
+                $networkAddress = $Matches[1]
+                $prefixLength   = [int]$Matches[2]
+                if (-not (Test-ValidIPv4 -Address $networkAddress)) { return $null }
+                if ($prefixLength -lt 0 -or $prefixLength -gt 32)   { return $null }
+                $subnetMask   = Convert-PrefixLengthToMask -PrefixLength $prefixLength
+                $subnetOctets = $networkAddress -split '\.'
+                $subnetPrefix = "$($subnetOctets[0]).$($subnetOctets[1]).$($subnetOctets[2])"
+                return @{
+                    NetworkAddress = $networkAddress
+                    PrefixLength   = $prefixLength
+                    SubnetMask     = $subnetMask
+                    SubnetPrefix   = $subnetPrefix
+                }
+            }
+        }
+    }
+
+    It "parses a /24 CIDR and derives the correct mask" {
+        $result = ConvertFrom-CIDR -CIDR "192.168.10.0/24"
+        $result.SubnetMask | Should -Be "255.255.255.0"
+    }
+
+    It "parses a /23 CIDR and derives the correct mask" {
+        $result = ConvertFrom-CIDR -CIDR "172.30.50.0/23"
+        $result.SubnetMask | Should -Be "255.255.254.0"
+    }
+
+    It "parses a /16 CIDR and derives the correct mask" {
+        $result = ConvertFrom-CIDR -CIDR "10.20.0.0/16"
+        $result.SubnetMask | Should -Be "255.255.0.0"
+    }
+
+    It "extracts the correct prefix length" {
+        $result = ConvertFrom-CIDR -CIDR "172.30.50.0/23"
+        $result.PrefixLength | Should -Be 23
+    }
+
+    It "extracts the correct network address" {
+        $result = ConvertFrom-CIDR -CIDR "172.30.50.0/23"
+        $result.NetworkAddress | Should -Be "172.30.50.0"
+    }
+
+    It "extracts the correct three-octet subnet prefix" {
+        $result = ConvertFrom-CIDR -CIDR "172.30.50.0/23"
+        $result.SubnetPrefix | Should -Be "172.30.50"
+    }
+
+    It "returns null for input without a slash" {
+        ConvertFrom-CIDR -CIDR "192.168.10.0" | Should -BeNullOrEmpty
+    }
+
+    It "returns null for input with only three octets before the slash" {
+        ConvertFrom-CIDR -CIDR "192.168.10/24" | Should -BeNullOrEmpty
+    }
+
+    It "returns null for a prefix length above 32" {
+        ConvertFrom-CIDR -CIDR "192.168.10.0/33" | Should -BeNullOrEmpty
+    }
+
+    It "returns null for an invalid network address octet" {
+        ConvertFrom-CIDR -CIDR "999.168.10.0/24" | Should -BeNullOrEmpty
     }
 }
 
 Describe "IP address computation" {
-    It "builds the new IP by combining the destination subnet with the last octet" {
-        $destinationSubnet = "10.20.30"
-        $currentIP         = "192.168.1.45"
-        $lastOctet         = ($currentIP -split '\.')[-1]
-        $newIP             = "$destinationSubnet.$lastOctet"
+    It "builds the new IP by combining the CIDR subnet prefix with the last octet" {
+        $cidrPrefix = "10.20.30"
+        $currentIP  = "192.168.1.45"
+        $lastOctet  = ($currentIP -split '\.')[-1]
+        $newIP      = "$cidrPrefix.$lastOctet"
         $newIP | Should -Be "10.20.30.45"
     }
 
@@ -89,42 +192,39 @@ Describe "IP address computation" {
         $lastOctet = ("172.16.5.254" -split '\.')[-1]
         "10.0.0.$lastOctet" | Should -Be "10.0.0.254"
     }
-}
 
-Describe "Parameter validation: DestinationSubnet" {
-    It "rejects a subnet with fewer than three octets" {
-        $result = & pwsh -NoProfile -NonInteractive -Command {
-            & "$args" -DestinationSubnet "192.168" -SubnetMask "255.255.255.0" -DnsServers "8.8.8.8,8.8.4.4"
-        } -args "$PSScriptRoot/../vm-subnet-mover.ps1" 2>&1
-        $LASTEXITCODE | Should -Be 1
-    }
-
-    It "rejects a subnet with four octets" {
-        $result = & pwsh -NoProfile -NonInteractive -Command {
-            & "$args" -DestinationSubnet "192.168.1.0" -SubnetMask "255.255.255.0" -DnsServers "8.8.8.8,8.8.4.4"
-        } -args "$PSScriptRoot/../vm-subnet-mover.ps1" 2>&1
-        $LASTEXITCODE | Should -Be 1
-    }
-
-    It "rejects a subnet with an out-of-range octet" {
-        $result = & pwsh -NoProfile -NonInteractive -Command {
-            & "$args" -DestinationSubnet "999.168.1" -SubnetMask "255.255.255.0" -DnsServers "8.8.8.8,8.8.4.4"
-        } -args "$PSScriptRoot/../vm-subnet-mover.ps1" 2>&1
-        $LASTEXITCODE | Should -Be 1
+    It "uses the first three octets of the CIDR network address as the prefix" {
+        $result = @{ SubnetPrefix = "172.30.50" }
+        $lastOctet = ("192.168.1.77" -split '\.')[-1]
+        "$($result.SubnetPrefix).$lastOctet" | Should -Be "172.30.50.77"
     }
 }
 
-Describe "Parameter validation: SubnetMask" {
-    It "rejects a mask with an invalid octet" {
+Describe "Parameter validation: DestinationSubnet CIDR" {
+    It "rejects input with no slash" {
         $result = & pwsh -NoProfile -NonInteractive -Command {
-            & "$args" -DestinationSubnet "192.168.10" -SubnetMask "255.255.300.0" -DnsServers "8.8.8.8,8.8.4.4"
+            & "$args" -DestinationSubnet "192.168.10.0" -DnsServers "8.8.8.8,8.8.4.4"
         } -args "$PSScriptRoot/../vm-subnet-mover.ps1" 2>&1
         $LASTEXITCODE | Should -Be 1
     }
 
-    It "rejects a non-dotted-decimal mask" {
+    It "rejects input with only three octets before the slash" {
         $result = & pwsh -NoProfile -NonInteractive -Command {
-            & "$args" -DestinationSubnet "192.168.10" -SubnetMask "not-a-mask" -DnsServers "8.8.8.8,8.8.4.4"
+            & "$args" -DestinationSubnet "192.168.10/24" -DnsServers "8.8.8.8,8.8.4.4"
+        } -args "$PSScriptRoot/../vm-subnet-mover.ps1" 2>&1
+        $LASTEXITCODE | Should -Be 1
+    }
+
+    It "rejects a prefix length above 32" {
+        $result = & pwsh -NoProfile -NonInteractive -Command {
+            & "$args" -DestinationSubnet "192.168.10.0/33" -DnsServers "8.8.8.8,8.8.4.4"
+        } -args "$PSScriptRoot/../vm-subnet-mover.ps1" 2>&1
+        $LASTEXITCODE | Should -Be 1
+    }
+
+    It "rejects a CIDR with an out-of-range network octet" {
+        $result = & pwsh -NoProfile -NonInteractive -Command {
+            & "$args" -DestinationSubnet "999.168.10.0/24" -DnsServers "8.8.8.8,8.8.4.4"
         } -args "$PSScriptRoot/../vm-subnet-mover.ps1" 2>&1
         $LASTEXITCODE | Should -Be 1
     }
@@ -133,21 +233,21 @@ Describe "Parameter validation: SubnetMask" {
 Describe "Parameter validation: DnsServers" {
     It "rejects a single DNS server" {
         $result = & pwsh -NoProfile -NonInteractive -Command {
-            & "$args" -DestinationSubnet "192.168.10" -SubnetMask "255.255.255.0" -DnsServers "8.8.8.8"
+            & "$args" -DestinationSubnet "192.168.10.0/24" -DnsServers "8.8.8.8"
         } -args "$PSScriptRoot/../vm-subnet-mover.ps1" 2>&1
         $LASTEXITCODE | Should -Be 1
     }
 
     It "rejects three DNS servers" {
         $result = & pwsh -NoProfile -NonInteractive -Command {
-            & "$args" -DestinationSubnet "192.168.10" -SubnetMask "255.255.255.0" -DnsServers "8.8.8.8,8.8.4.4,1.1.1.1"
+            & "$args" -DestinationSubnet "192.168.10.0/24" -DnsServers "8.8.8.8,8.8.4.4,1.1.1.1"
         } -args "$PSScriptRoot/../vm-subnet-mover.ps1" 2>&1
         $LASTEXITCODE | Should -Be 1
     }
 
     It "rejects an invalid DNS IP address" {
         $result = & pwsh -NoProfile -NonInteractive -Command {
-            & "$args" -DestinationSubnet "192.168.10" -SubnetMask "255.255.255.0" -DnsServers "8.8.8.8,not-an-ip"
+            & "$args" -DestinationSubnet "192.168.10.0/24" -DnsServers "8.8.8.8,not-an-ip"
         } -args "$PSScriptRoot/../vm-subnet-mover.ps1" 2>&1
         $LASTEXITCODE | Should -Be 1
     }
@@ -183,10 +283,9 @@ Describe "Network change operations" {
         Mock Write-Host {}
     }
 
-    It "calls New-NetIPAddress with the correct new IP" {
+    It "calls New-NetIPAddress with the correct new IP derived from CIDR" {
         & "$PSScriptRoot/../vm-subnet-mover.ps1" `
-            -DestinationSubnet "10.20.30" `
-            -SubnetMask "255.255.255.0" `
+            -DestinationSubnet "10.20.30.0/24" `
             -DnsServers "8.8.8.8,8.8.4.4"
 
         Should -Invoke New-NetIPAddress -Times 1 -ParameterFilter {
@@ -194,10 +293,9 @@ Describe "Network change operations" {
         }
     }
 
-    It "calls New-NetIPAddress with the correct prefix length" {
+    It "calls New-NetIPAddress with the prefix length parsed from the CIDR" {
         & "$PSScriptRoot/../vm-subnet-mover.ps1" `
-            -DestinationSubnet "10.20.30" `
-            -SubnetMask "255.255.255.0" `
+            -DestinationSubnet "10.20.30.0/24" `
             -DnsServers "8.8.8.8,8.8.4.4"
 
         Should -Invoke New-NetIPAddress -Times 1 -ParameterFilter {
@@ -205,10 +303,19 @@ Describe "Network change operations" {
         }
     }
 
+    It "uses the correct prefix length for a non-/24 CIDR (/23)" {
+        & "$PSScriptRoot/../vm-subnet-mover.ps1" `
+            -DestinationSubnet "172.30.50.0/23" `
+            -DnsServers "8.8.8.8,8.8.4.4"
+
+        Should -Invoke New-NetIPAddress -Times 1 -ParameterFilter {
+            $PrefixLength -eq 23
+        }
+    }
+
     It "calls Set-DnsClientServerAddress with both DNS servers" {
         & "$PSScriptRoot/../vm-subnet-mover.ps1" `
-            -DestinationSubnet "10.20.30" `
-            -SubnetMask "255.255.255.0" `
+            -DestinationSubnet "10.20.30.0/24" `
             -DnsServers "8.8.8.8,8.8.4.4"
 
         Should -Invoke Set-DnsClientServerAddress -Times 1 -ParameterFilter {
@@ -218,8 +325,7 @@ Describe "Network change operations" {
 
     It "calls Remove-NetIPAddress before applying the new IP" {
         & "$PSScriptRoot/../vm-subnet-mover.ps1" `
-            -DestinationSubnet "10.20.30" `
-            -SubnetMask "255.255.255.0" `
+            -DestinationSubnet "10.20.30.0/24" `
             -DnsServers "8.8.8.8,8.8.4.4"
 
         Should -Invoke Remove-NetIPAddress -Times 1

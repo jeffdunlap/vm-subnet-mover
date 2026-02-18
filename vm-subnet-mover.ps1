@@ -4,9 +4,6 @@ Param(
     [string]$DestinationSubnet,
 
     [Parameter(Mandatory = $true)]
-    [string]$SubnetMask,
-
-    [Parameter(Mandatory = $true)]
     [string]$DnsServers
 )
 
@@ -26,31 +23,47 @@ function Test-ValidIPv4 {
     return $true
 }
 
-function Convert-MaskToPrefixLength {
-    param([string]$Mask)
-    $binary = ($Mask -split '\.' | ForEach-Object { [Convert]::ToString([int]$_, 2).PadLeft(8, '0') }) -join ''
-    return ($binary.ToCharArray() | Where-Object { $_ -eq '1' }).Count
+function Convert-PrefixLengthToMask {
+    param([int]$PrefixLength)
+    $binary = '1' * $PrefixLength + '0' * (32 - $PrefixLength)
+    $octets = for ($i = 0; $i -lt 32; $i += 8) {
+        [Convert]::ToInt32($binary.Substring($i, 8), 2)
+    }
+    return $octets -join '.'
 }
 
-# --- Validate DestinationSubnet ---
-$subnetOctets = $DestinationSubnet -split '\.'
-if ($subnetOctets.Count -ne 3) {
-    Write-Log "ERROR: DestinationSubnet '$DestinationSubnet' must contain exactly three octets (e.g. '192.168.10')."
-    exit 1
-}
-foreach ($octet in $subnetOctets) {
-    if ($octet -notmatch '^\d+$' -or [int]$octet -lt 0 -or [int]$octet -gt 255) {
-        Write-Log "ERROR: DestinationSubnet '$DestinationSubnet' contains an invalid octet '$octet'."
-        exit 1
+function ConvertFrom-CIDR {
+    param([string]$CIDR)
+    if ($CIDR -notmatch '^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/(\d{1,2})$') { return $null }
+
+    $networkAddress = $Matches[1]
+    $prefixLength   = [int]$Matches[2]
+
+    if (-not (Test-ValidIPv4 -Address $networkAddress)) { return $null }
+    if ($prefixLength -lt 0 -or $prefixLength -gt 32)   { return $null }
+
+    $subnetMask   = Convert-PrefixLengthToMask -PrefixLength $prefixLength
+    $subnetOctets = $networkAddress -split '\.'
+    $subnetPrefix = "$($subnetOctets[0]).$($subnetOctets[1]).$($subnetOctets[2])"
+
+    return @{
+        NetworkAddress = $networkAddress
+        PrefixLength   = $prefixLength
+        SubnetMask     = $subnetMask
+        SubnetPrefix   = $subnetPrefix
     }
 }
 
-# --- Validate SubnetMask ---
-if (-not (Test-ValidIPv4 -Address $SubnetMask)) {
-    Write-Log "ERROR: SubnetMask '$SubnetMask' is not a valid dotted-decimal mask (e.g. '255.255.255.0')."
+# --- Validate DestinationSubnet (CIDR notation) ---
+$cidrInfo = ConvertFrom-CIDR -CIDR $DestinationSubnet
+if ($null -eq $cidrInfo) {
+    Write-Log "ERROR: DestinationSubnet '$DestinationSubnet' is not valid CIDR notation (e.g. '172.30.50.0/23')."
     exit 1
 }
-$prefixLength = Convert-MaskToPrefixLength -Mask $SubnetMask
+
+$subnetPrefix = $cidrInfo.SubnetPrefix
+$subnetMask   = $cidrInfo.SubnetMask
+$prefixLength = $cidrInfo.PrefixLength
 
 # --- Validate DnsServers ---
 $dnsArray = $DnsServers -split ',' | ForEach-Object { $_.Trim() }
@@ -75,13 +88,13 @@ if ($null -eq $ipInfo) {
     exit 1
 }
 
-$currentIP   = $ipInfo.IPAddress
-$lastOctet   = ($currentIP -split '\.')[-1]
-$newIP       = "$DestinationSubnet.$lastOctet"
+$currentIP    = $ipInfo.IPAddress
+$lastOctet    = ($currentIP -split '\.')[-1]
+$newIP        = "$subnetPrefix.$lastOctet"
 $adapterIndex = $ipInfo.InterfaceIndex
 
 Write-Log "Current IP address : $currentIP"
-Write-Log "New IP address     : $newIP (subnet $DestinationSubnet, mask $SubnetMask)"
+Write-Log "New IP address     : $newIP (subnet $DestinationSubnet, mask $subnetMask)"
 Write-Log "DNS servers        : $($dnsArray -join ', ')"
 
 # --- Apply changes ---
